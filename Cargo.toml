@@ -1,0 +1,13 @@
+[package]
+name = "bonelab-mod-manager"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+indicatif = "0.18.0"
+modio = "0.13.0"
+reqwest = {version="0.12.22", features=["json"]}
+serde = "1.0.219"
+serde_json = "1.0.140"
+structopt = "0.3.26"
+tokio = {version="1.46.1", features=["full"]}
