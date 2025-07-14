@@ -34,3 +34,7 @@ bonelab-mod-manager -s "$(cat modio_api_key)" "$(cat modio_folder)"
 - `$(...)` is a bash-ism to place the output of a command there
 - this is because its a pain to type it every time
 
+# install
+```bash
+cargo install --git https://github.com/aerits/bonelab-mod-manager
+```
