@@ -1,6 +1,8 @@
 # bad bonelab mod manager
 cli app to manage bonelab mods
 
+NOTE: I coded this on linux, and have not tested this on windows, it probably does not work on windows.
+
 ```sh
 [diced@mangoes ~]$ bonelab-mod-manager -h
 bonelab-mod-manager 0.1.0
