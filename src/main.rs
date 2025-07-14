@@ -239,6 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 file_id: Id::new(target.modfileId),
             };
             modio.download(action).await?.save_to_file(mod_.manifest.clone().objects.pallet.palletBarcode + ".zip").await?;
+            todo!("its not done")
         }
     }
 
