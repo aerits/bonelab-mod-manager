@@ -7,19 +7,22 @@ use std::{
 };
 
 use indicatif::{ProgressBar, ProgressStyle};
-use modio::filter::prelude::*;
 use modio::{Credentials, DownloadAction, Modio, Result, auth::Token, types::id::Id};
 use modio::{files::filters::Id as fid, mods::Mod, types::id::GameId};
+use modio::{filter::prelude::*, types::Timestamp};
 use reqwest::Client;
 use serde_json::{Value, json};
 use structopt::StructOpt;
 
-const BONELAB: u64 = 3809;
+use crate::structs::Manifest;
 
+const BONELAB: u64 = 3809;
+const TEMPLATE: &str = "[{bar}][time: {elapsed_precise}][eta: {eta_precise}] {msg}";
+
+#[derive(Clone)]
 struct InstalledMod {
     path: String,
-    mod_id: u64,
-    file_id: u64,
+    manifest: Manifest,
 }
 
 /// Bonelab mod manager
@@ -41,10 +44,20 @@ struct Opt {
     update_all: bool,
 }
 
+mod structs;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // let opt = Opt {
+    //     email: None,
+    //     api_key: "e1513467d4c37c1d8b9a24e529546d8a".to_owned(),
+    //     mod_folder: PathBuf::from("/run/media/diced/aurora-dx_fedora/home/diced/SteamLibrary/steamapps/compatdata/1592190/pfx/drive_c/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB/Mods/"),
+    //     subscribe_all: false,
+    //     update_all: false,
+    // };
     let opt = Opt::from_args();
-    let path = opt.mod_folder
+    let path = opt
+        .mod_folder
         .clone()
         .as_mut_os_str()
         .to_string_lossy()
@@ -71,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mod_manifests: Vec<String> = files
         .iter()
-        .filter(|x| x.ends_with(".manifest"))
+        .filter(|x| x.ends_with(".manifest") && !x.starts_with("SLZ"))
         .map(|x| x.clone())
         .collect();
 
@@ -83,23 +96,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // println!("{}", manifest);
         let path = path.clone() + &manifest;
         let manifest = fs::read_to_string(&path)?;
-        // println!("{}", manifest);
-        let deserialized: Value = serde_json::from_str(&manifest)?;
-        let mod_id: u64 =
-            match serde_json::from_value(deserialized["objects"]["3"]["modId"].clone()) {
-                Ok(x) => x,
-                Err(_) => {
-                    continue;
-                } // mod not downloaded from modio
-            };
-        let file_id: u64 =
-            serde_json::from_value(deserialized["objects"]["3"]["modfileId"].clone())?;
-        let mod_ = InstalledMod {
-            path,
-            mod_id,
-            file_id,
+        let manifest: Manifest = serde_json::from_str(&manifest)?;
+        let target = match &manifest.objects.mod_target {
+            Some(x) => x,
+            None => {
+                continue;
+            }
         };
-        installed_mods.push(mod_);
+        installed_mods.push(InstalledMod { path, manifest });
         pb.inc(1);
     }
     pb.finish_and_clear();
@@ -140,32 +144,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if opt.subscribe_all {
         let mut subscribed_mods = match fs::read_to_string("modio_subscribed_mods") {
-            Ok(x) => {x},
-            Err(_) => {String::new()},
+            Ok(x) => x,
+            Err(_) => String::new(),
         };
-        let installed_mods: Vec<&InstalledMod> = installed_mods.iter().filter(|x| {
-            !subscribed_mods.contains(&x.path)
-        }).collect();
+        let installed_mods: Vec<&InstalledMod> = installed_mods
+            .iter()
+            .filter(|x| !subscribed_mods.contains(&x.path))
+            .collect();
         println!("subscribing to all installed mods...");
         let pb = ProgressBar::new(installed_mods.len() as u64);
-        pb.set_style(ProgressStyle::with_template("[{bar}][time: {elapsed_precise}][eta: {eta_precise}] {msg}").unwrap());
+        pb.set_style(ProgressStyle::with_template(TEMPLATE).unwrap());
         for mod_ in installed_mods {
             pb.inc(1);
-            pb.set_message(format!("subscribing to {:?}", PathBuf::from(&mod_.path).file_name().unwrap()));
-            let modref = modio.mod_(Id::new(BONELAB), Id::new(mod_.mod_id));
-            let mut subscribed = false;
-            let mut delay = 1;
-            while !subscribed {
-                match modref.clone().subscribe().await {
-                Ok(_) => {
-                    subscribed = true;
-                    subscribed_mods += &(mod_.path.clone() + "\n");
-                },
-                Err(x) => {
-                    pb.set_message(format!("subscribing to {:?}, error: {}", PathBuf::from(&mod_.path).file_name().unwrap(), x));
-                    delay *= 2;
+            pb.set_message(format!(
+                "subscribing to {:?}",
+                PathBuf::from(&mod_.path).file_name().unwrap()
+            ));
+            let mod_id = match &mod_.manifest.objects.mod_target {
+                Some(x) => x,
+                None => {
+                    panic!()
                 }
             };
+            let modref = modio.mod_(Id::new(BONELAB), Id::new(mod_id.modId));
+            let mut subscribed = false;
+            let mut delay = 0;
+            while !subscribed {
+                match modref.clone().subscribe().await {
+                    Ok(_) => {
+                        subscribed = true;
+                        subscribed_mods += &(mod_.path.clone() + "\n");
+                    }
+                    Err(x) => {
+                        pb.set_message(format!(
+                            "subscribing to {:?}, error: {}",
+                            PathBuf::from(&mod_.path).file_name().unwrap(),
+                            x
+                        ));
+                        delay = 2 * delay + 1;
+                    }
+                };
                 thread::sleep(Duration::new(delay, 0));
             }
         }
@@ -174,7 +192,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         file.write_all(subscribed_mods.as_bytes())?;
     }
     if opt.update_all {
-        println!("this option doesn't do anything yet");
+        // println!("this option doesn't do anything yet");
+        println!("updating all installed mods...");
+        let pb = ProgressBar::new(installed_mods.len() as u64);
+        pb.set_style(ProgressStyle::with_template(TEMPLATE).unwrap());
+        'baseloop: for mod_ in installed_mods {
+            pb.inc(1);
+            pb.set_message(format!(
+                "Updating {}",
+                mod_.manifest.clone().objects.pallet.palletBarcode
+            ));
+            let target = match mod_.manifest.clone().objects.mod_target {
+                Some(x) => x,
+                None => {
+                    continue;
+                }
+            };
+            let installed_version: i64 = mod_.manifest.clone().objects.pallet.updateDate.parse()?;
+            let modref = modio.mod_(Id::new(BONELAB), Id::new(target.modId));
+            let mut online_mod = None;
+            let mut delay = 0;
+            while online_mod.is_none() {
+                match modref.clone().get().await {
+                    Ok(x) => online_mod = Some(x),
+                    Err(x) => {
+                        println!("Error: {}", x);
+                        if !x.is_ratelimited() {
+                            println!("skipped {}", mod_.manifest.clone().objects.pallet.palletBarcode);
+                            continue 'baseloop;
+                        }
+                        delay = 2 * delay + 1;
+                    }
+                }
+                thread::sleep(Duration::new(delay, 0));
+            }
+            let online_mod = online_mod.unwrap();
+            let online_version = online_mod.date_updated.as_secs() * 1000;
+            if online_version < installed_version {
+                continue;
+            }
+            let mut new_manifest = mod_.manifest.clone();
+            new_manifest.objects.pallet.updateDate = online_version.to_string();
+            let action = DownloadAction::File {
+                game_id: Id::new(BONELAB),
+                mod_id: Id::new(target.modId),
+                file_id: Id::new(target.modfileId),
+            };
+            modio.download(action).await?.save_to_file(mod_.manifest.clone().objects.pallet.palletBarcode + ".zip").await?;
+        }
     }
 
     Ok(())
