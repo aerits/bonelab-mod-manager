@@ -12,10 +12,11 @@ USAGE:
     bonelab-mod-manager [FLAGS] [OPTIONS] <api-key> <mod-folder>
 
 FLAGS:
-    -h, --help             Prints help information
-    -s, --subscribe-all    subscribe to all mods
-    -u, --update-all       update all mods / does not do anything rn
-    -V, --version          Prints version information
+    -h, --help                      Prints help information
+    -i, --install-all-subscribed    
+    -s, --subscribe-all             subscribe to all mods
+    -u, --update-all                update all mods / does not do anything rn
+    -V, --version                   Prints version information
 
 OPTIONS:
     -e, --email <email>    email to log into mod.io
@@ -31,10 +32,11 @@ ARGS:
 
 # example usage
 ```bash
-bonelab-mod-manager -s "$(cat modio_api_key)" "$(cat modio_folder)"
+bonelab-mod-manager -s "$(cat modio_api_key)" "$(cat modio_folder) -iu"
 ```
 - `$(...)` is a bash-ism to place the output of a command there
 - this is because its a pain to type it every time
+- these flags will install any new mods you subscribed to and check for updates for every mod
 
 # install
 ```bash
