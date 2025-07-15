@@ -38,10 +38,12 @@ struct Opt {
     #[structopt(short, long)]
     email: Option<String>,
     /// your mod.io api key
-    api_key: String,
+    #[structopt(short, long)]
+    api_key: Option<String>,
     /// folder where bonelab mods are,
     /// usually something like /C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB/Mods/
-    mod_folder: PathBuf,
+    #[structopt(short, long)]
+    mod_folder: Option<PathBuf>,
     /// subscribe to all mods
     #[structopt(short, long, name = "subscribe to all mods")]
     subscribe_all: bool,
@@ -54,15 +56,41 @@ struct Opt {
 
 mod structs;
 
+#[derive(Debug)]
+struct BMMError(String);
+impl std::fmt::Display for BMMError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl std::error::Error for BMMError {}
+
+fn throw<T>(err: &str) -> Result<T, Box<dyn std::error::Error>> {
+    Err(Box::new(BMMError(err.into())))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let xdg_config_home = env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
+        // Default to ~/.config if XDG_CONFIG_HOME is not set
+        let home = env::var("HOME").unwrap();
+        format!("{}/.config", home)
+    });
     let opt = Opt::from_args();
     let path = opt
         .mod_folder
-        .clone()
-        .as_mut_os_str()
+        .clone();
+    let path = match path {
+        Some(mut x) => x.as_mut_os_str()
         .to_string_lossy()
-        .into_owned();
+        .into_owned(),
+        None => {
+            match fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_folder") {
+                Ok(x) => {x},
+                Err(_) => {throw("Missing modio folder")?},
+            }
+        },
+    };  
 
     println!("{}", path);
 
@@ -109,9 +137,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     pb.finish_and_clear();
 
-    let mut modio = Modio::new(Credentials::new(opt.api_key))?;
+    let mut modio = Modio::new(Credentials::new(match opt.api_key {
+        Some(x) => {x},
+        None => {match fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_api_key") {
+            Ok(x) => {x},
+            Err(_) => {throw("Missing modio api key")?},
+        }},
+    }))?;
 
-    let access_token = fs::read_to_string("modio_access_token");
+    let access_token = fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_access_token");
     if let Ok(token) = access_token {
         println!("token found");
         let token = Token {
@@ -133,7 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let creds = modio.auth().security_code(&code).await?;
         if let Some(token) = &creds.token {
             println!("Access token:\n{}", token.value);
-            let mut file = File::create("modio_access_token")?;
+            let mut file = File::create(xdg_config_home.clone() + "/bonelab-mod-manager/modio_access_token")?;
             file.write_all(token.value.as_bytes())?;
             modio = modio.with_token(token.clone());
         } else {
@@ -144,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("logged in as {}", user.unwrap().username);
 
     if opt.subscribe_all {
-        let mut subscribed_mods = match fs::read_to_string("modio_subscribed_mods") {
+        let mut subscribed_mods = match fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_subscribed_mods") {
             Ok(x) => x,
             Err(_) => String::new(),
         };
@@ -155,7 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("subscribing to all installed mods...");
         let pb = ProgressBar::new(installed_mods.len() as u64);
         pb.set_style(ProgressStyle::with_template(TEMPLATE).unwrap());
-        for mod_ in installed_mods {
+        'baseloop: for mod_ in installed_mods {
             pb.inc(1);
             pb.set_message(format!(
                 "subscribing to {:?}",
@@ -251,7 +285,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &online_mod,
                 &modio,
                 path.clone(),
-                opt.mod_folder.clone(),
+                PathBuf::from(path.clone()),
                 Some(new_manifest),
                 files.last().map(|v| &**v) // the highest file id is the latest modfile
             )
@@ -260,6 +294,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if opt.install_all_subscribed {
+        println!("installing all new subscribed mods");
         let filter = GameId::_in(BONELAB).and(Name::asc());
         let query = modio.user().subscriptions(filter).collect().await?;
         let pb = ProgressBar::new(installed_mods.len() as u64);
@@ -282,7 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // println!("mod is installed");
             } else {
                 // println!("{}", mod_.name);
-                download_mod(mod_, &modio, path.clone(), opt.mod_folder.clone(), None, None).await?;
+                download_mod(mod_, &modio, path.clone(), PathBuf::from(path.clone()), None, None).await?;
             }
         }
         pb.finish();
@@ -312,6 +347,11 @@ async fn download_mod(
             modfile
         }
     };
+    let xdg_cache_home = env::var("XDG_CACHE_HOME").unwrap_or_else(|_| {
+        // Default to ~/.cache if XDG_CACHE_HOME is not set
+        let home = env::var("HOME").unwrap();
+        format!("{}/.cache", home)
+    });
 
     let action = DownloadAction::File {
         game_id: Id::new(BONELAB),
@@ -319,21 +359,19 @@ async fn download_mod(
         file_id: Id::new(modfile.id.into()),
     };
     let _output = Command::new("mkdir")
-        .arg("zips")
+        .arg(xdg_cache_home.clone() + "/bonelab-mod-manager")
         .output() // Execute the command
         .expect("Failed to execute command");
     modio
         .download(action)
         .await?
-        .save_to_file(format!("./zips/{}.zip", mod_.name.clone()))
+        .save_to_file(format!("{}/bonelab-mod-manager/{}.zip", &xdg_cache_home, mod_.name.clone()))
         .await?;
 
     // shell commands to unzip and then figure out the barcode and pallet name and catalog name
-    let current_dir = env::current_dir()?;
-    let current_dir = current_dir.to_str().unwrap();
     let _output = Command::new("unzip")
         .args([
-            "".to_string() + current_dir + "/zips/" + &mod_.name.clone() + "",
+            "".to_string() + &xdg_cache_home + "/bonelab-mod-manager/" + &mod_.name.clone() + "",
             "-d".into(),
             path.clone() + "/" + &mod_.name,
         ])
@@ -375,11 +413,9 @@ async fn download_mod(
         .arg(path.clone() + "/" + &mod_.name + "/" + &barcode.trim())
         .arg(path.clone() + "/")
         .output()?;
-    println!("{:#?}", _output);
     let _output = Command::new("rmdir")
         .arg(path.clone() + "/" + &mod_.name)
         .output()?;
-    println!("{:#?}", _output);
     Ok(())
 }
 
