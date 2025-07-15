@@ -1,20 +1,18 @@
 use std::{
-    fs::{self, File},
-    io::{self, Write},
-    path::PathBuf,
-    thread,
-    time::Duration,
+    collections::HashMap, env, fs::{self, File}, io::{self, Write}, path::PathBuf, process::Command, thread, time::Duration
 };
 
 use indicatif::{ProgressBar, ProgressStyle};
-use modio::{Credentials, DownloadAction, Modio, Result, auth::Token, types::id::Id};
-use modio::{files::filters::Id as fid, mods::Mod, types::id::GameId};
+use modio::{
+    Credentials, DownloadAction, Modio, Result, auth::Token, mods::filters::GameId, types::id::Id,
+};
+use modio::{files::filters::Id as fid, mods::Mod};
 use modio::{filter::prelude::*, types::Timestamp};
 use reqwest::Client;
 use serde_json::{Value, json};
 use structopt::StructOpt;
 
-use crate::structs::Manifest;
+use crate::structs::{Isa, Manifest, ModListing, ModTarget, Object, Pallet, Reference, Root};
 
 const BONELAB: u64 = 3809;
 const TEMPLATE: &str = "[{bar}][time: {elapsed_precise}][eta: {eta_precise}] {msg}";
@@ -42,19 +40,14 @@ struct Opt {
     /// update all mods / does not do anything rn
     #[structopt(short, long, name = "update all mods")]
     update_all: bool,
+    #[structopt(short, long, name = "install subscribed mods")]
+    install_all_subscribed: bool,
 }
 
 mod structs;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // let opt = Opt {
-    //     email: None,
-    //     api_key: "e1513467d4c37c1d8b9a24e529546d8a".to_owned(),
-    //     mod_folder: PathBuf::from("/run/media/diced/aurora-dx_fedora/home/diced/SteamLibrary/steamapps/compatdata/1592190/pfx/drive_c/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB/Mods/"),
-    //     subscribe_all: false,
-    //     update_all: false,
-    // };
     let opt = Opt::from_args();
     let path = opt
         .mod_folder
@@ -97,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let path = path.clone() + &manifest;
         let manifest = fs::read_to_string(&path)?;
         let manifest: Manifest = serde_json::from_str(&manifest)?;
-        let target = match &manifest.objects.mod_target {
+        let _target = match &manifest.objects.mod_target {
             Some(x) => x,
             None => {
                 continue;
@@ -196,7 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("updating all installed mods...");
         let pb = ProgressBar::new(installed_mods.len() as u64);
         pb.set_style(ProgressStyle::with_template(TEMPLATE).unwrap());
-        'baseloop: for mod_ in installed_mods {
+        'baseloop: for mod_ in &installed_mods {
             pb.inc(1);
             pb.set_message(format!(
                 "Updating {}",
@@ -218,7 +211,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Err(x) => {
                         println!("Error: {}", x);
                         if !x.is_ratelimited() {
-                            println!("skipped {}", mod_.manifest.clone().objects.pallet.palletBarcode);
+                            println!(
+                                "skipped {}",
+                                mod_.manifest.clone().objects.pallet.palletBarcode
+                            );
                             continue 'baseloop;
                         }
                         delay = 2 * delay + 1;
@@ -238,43 +234,164 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 mod_id: Id::new(target.modId),
                 file_id: Id::new(target.modfileId),
             };
-            modio.download(action).await?.save_to_file(mod_.manifest.clone().objects.pallet.palletBarcode + ".zip").await?;
+            modio
+                .download(action)
+                .await?
+                .save_to_file(mod_.manifest.clone().objects.pallet.palletBarcode + ".zip")
+                .await?;
             todo!("its not done")
         }
     }
 
+    if opt.install_all_subscribed {
+        let filter = GameId::_in(BONELAB).and(Name::asc());
+        let query = modio.user().subscriptions(filter).collect().await?;
+        let pb = ProgressBar::new(installed_mods.len() as u64);
+        pb.set_style(ProgressStyle::with_template(TEMPLATE).unwrap());
+        'outer: for mod_ in query.iter() {
+            pb.inc(1);
+            pb.set_message(format!("{}", mod_.name));
+            let mut found = false;
+            'inner: for i_mod_ in installed_mods.iter() {
+                let target = match i_mod_.manifest.clone().objects.mod_target {
+                    Some(x) => x,
+                    None => continue 'inner,
+                };
+                if mod_.id == target.modId {
+                    found = true;
+                    break 'inner;
+                }
+            }
+            if found {
+                // println!("mod is installed");
+            } else {
+                // println!("{}", mod_.name);
+                let modfile = &mod_.modfile;
+                let modfile = match modfile {
+                    Some(x) => x,
+                    None => {
+                        println!("no modfile");
+                        continue 'outer;
+                    }
+                };
+                let action = DownloadAction::File {
+                    game_id: Id::new(BONELAB),
+                    mod_id: Id::new(mod_.id.into()),
+                    file_id: Id::new(modfile.id.into()),
+                };
+                let _output = Command::new("mkdir").arg("zips")
+                    .output() // Execute the command
+                    .expect("Failed to execute command");
+                modio
+                    .download(action)
+                    .await?
+                    .save_to_file(format!("./zips/{}.zip", mod_.name.clone()))
+                    .await?;
+
+                // shell commands to unzip and then figure out the barcode and pallet name and catalog name
+                let current_dir = env::current_dir()?;
+                let current_dir = current_dir.to_str().unwrap();
+                let _output = Command::new("unzip")
+                    .args(["".to_string() + current_dir + "/zips/" + &mod_.name.clone() + "", "-d".into(), path.clone() + "/" + &mod_.name])
+                    .output() // Execute the command
+                    .expect("Failed to execute command");
+                let barcode = Command::new("ls").arg(path.clone() + "/" + &mod_.name).output()?.stdout;
+                let barcode = String::from_utf8(barcode)?;
+                let zip_path = path.clone() + "/" + &mod_.name + "/" + &barcode;
+                let zip_contents = Command::new("ls").arg("".to_owned() + &zip_path.trim() + "").output()?;
+                let zip_contents = zip_contents.stdout;
+                let zip_contents = String::from_utf8(zip_contents)?;
+                let mut jsons = Vec::new();
+                for line in zip_contents.lines() {
+                    if line.ends_with(".json") {
+                        jsons.push(line);
+                    }
+                }
+                assert_eq!(jsons.len(), 2);
+                if !jsons[0].ends_with("pallet.json") {
+                    jsons.reverse();
+                }
+                
+                let mani = make_manifest(mod_, modfile, &barcode, jsons[0].trim(), jsons[1].trim());
+                let mani_str = serde_json::to_string_pretty(&mani)?;
+                let mut save_path = opt.mod_folder.clone();
+                save_path.push(mani.clone().objects.pallet.palletBarcode + ".manifest");
+                let mut file = File::create(save_path)?;
+                file.write_all(mani_str.as_bytes())?;
+
+                let _output = Command::new("mv").arg(path.clone() + "/" + &mod_.name + "/*").arg(path.clone() + "/").output()?;
+                let _output = Command::new("rmdir").arg(path.clone() + "/" + &mod_.name).output()?;
+            }
+        }
+        pb.finish();
+    }
     Ok(())
 }
 
-async fn download_mod(modio: Modio) -> Result<(), Box<dyn std::error::Error>> {
-    let modref = modio.mod_(Id::new(BONELAB), Id::new(4061166));
-    modref.clone().subscribe().await?;
-    let mod_ = modref.clone().get().await?;
-    println!("{:?}", mod_.name);
-
-    let filter = fid::asc();
-
-    let file = modref
-        .clone()
-        .files()
-        .search(filter)
-        .first()
-        .await
-        .unwrap()
-        .unwrap()
-        .id;
-
-    let action = DownloadAction::File {
-        game_id: Id::new(3809),
-        mod_id: Id::new(4061166),
-        file_id: file,
+fn make_manifest(mod_: &Mod, modfile: &modio::files::File, barcode: &str, pallet_name: &str, catalog_name: &str) -> Manifest {
+    // let pallet_barcode = &(mod_.submitted_by.username.clone() + &mod_.name);
+    let time_now = mod_.date_updated.as_secs() * 1000;
+    let mut targets = HashMap::new();
+    targets.insert(
+        "pc".to_string(),
+        Reference {
+            reference: "3".into(),
+            type_: "mod-target-modio#0".into(),
+        },
+    );
+    let manifest = Manifest {
+        version: 2,
+        root: Root {
+            reference: "1".into(),
+            type_: "pallet-manifest#0".into(),
+        },
+        objects: Object {
+            pallet: Pallet {
+                palletBarcode: barcode.into(),
+                palletPath: format!(
+                    "C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB\\\\Mods\\\\{}\\\\{}.pallet.json",
+                    barcode, pallet_name
+                ),
+                catalogPath: format!(
+                    "C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB\\\\Mods\\\\{}\\\\{}.json",
+                    barcode, catalog_name
+                ),
+                version: modfile.version.clone(),
+                installedDate: time_now.to_string(),
+                updateDate: time_now.to_string(),
+                modListing: Some(Reference {
+                    reference: "2".into(),
+                    type_: "mod-listing#0".into(),
+                }),
+                active: true,
+                isa: Isa {
+                    type_: "pallet-manifest#0".into(),
+                },
+            },
+            mod_listing: Some(ModListing {
+                barcode: barcode.into(),
+                title: Some(mod_.name.clone()),
+                description: mod_.description.clone(),
+                author: Some(mod_.submitted_by.username.clone()),
+                version: modfile.version.clone(),
+                thumbnailUrl: Some(mod_.logo.thumb_320x180.to_string()),
+                targets: targets,
+                isa: Isa {
+                    type_: "mod-listing#0".into(),
+                },
+            }),
+            mod_target: Some(ModTarget {
+                thumbnailOverride: None,
+                gameId: mod_.game_id.into(),
+                modId: mod_.id.into(),
+                modfileId: modfile.id.into(),
+                isa: Isa {
+                    type_: "mod-target-modio#0".into(),
+                },
+            }),
+        },
     };
-    modio
-        .download(action)
-        .await?
-        .save_to_file(mod_.name + ".zip")
-        .await?;
-    Ok(())
+    return manifest;
 }
 
 fn prompt(prompt: &str) -> io::Result<String> {
