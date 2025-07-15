@@ -2,6 +2,7 @@
 cli app to manage bonelab mods
 
 NOTE: I coded this on linux, and have not tested this on windows, it probably does not work on windows.
+EXTRA NOTE: the code uses some bash shell commands, you might want to just run this in wsl2 if you are on windows
 
 ```sh
 [diced@mangoes ~]$ bonelab-mod-manager -h
