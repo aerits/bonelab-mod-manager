@@ -10,7 +10,7 @@ bonelab-mod-manager 0.1.0
 Bonelab mod manager
 
 USAGE:
-    bonelab-mod-manager [FLAGS] [OPTIONS] <api-key> <mod-folder>
+    bonelab-mod-manager [FLAGS] [OPTIONS]
 
 FLAGS:
     -h, --help                      Prints help information
@@ -20,12 +20,10 @@ FLAGS:
     -V, --version                   Prints version information
 
 OPTIONS:
-    -e, --email <email>    email to log into mod.io
-
-ARGS:
-    <api-key>       your mod.io api key
-    <mod-folder>    folder where bonelab mods are, usually something like
-                    /C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB/Mods/
+    -a, --api-key <api-key>          your mod.io api key
+    -e, --email <email>              email to log into mod.io
+    -m, --mod-folder <mod-folder>    folder where bonelab mods are, usually something like
+                                     /C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB/Mods/
 ```
 
 # help
@@ -33,11 +31,12 @@ ARGS:
 
 # example usage
 ```bash
-bonelab-mod-manager -s "$(cat modio_api_key)" "$(cat modio_folder) -iu"
+bonelab-mod-manager -s "-iu"
 ```
-- `$(...)` is a bash-ism to place the output of a command there
-- this is because its a pain to type it every time
 - these flags will install any new mods you subscribed to and check for updates for every mod
+- you should create a `~/.config/bonelab-mod-manager/` and make 2 files
+    - `modio_api_key` and `modio_mod_folder`
+    - these files let you not have to put `--mod-folder` and `--api-key` in the cli options
 
 # install
 ```bash
