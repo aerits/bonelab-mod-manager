@@ -1,10 +1,18 @@
 use std::{
-    collections::HashMap, env, fs::{self, File}, io::{self, Write}, path::PathBuf, process::Command, thread, time::Duration
+    collections::HashMap,
+    env,
+    fs::{self, File},
+    io::{self, Write},
+    path::PathBuf,
+    process::Command,
+    thread,
+    time::Duration,
 };
 
 use indicatif::{ProgressBar, ProgressStyle};
 use modio::{
-    Credentials, DownloadAction, Modio, Result, auth::Token, mods::filters::GameId, types::id::Id,
+    Credentials, DownloadAction, Modio, Result, TargetPlatform, auth::Token, mods::filters::GameId,
+    types::id::Id,
 };
 use modio::{files::filters::Id as fid, mods::Mod};
 use modio::{filter::prelude::*, types::Timestamp};
@@ -222,24 +230,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 thread::sleep(Duration::new(delay, 0));
             }
+
             let online_mod = online_mod.unwrap();
             let online_version = online_mod.date_updated.as_secs() * 1000;
-            if online_version < installed_version {
+
+            let files = modref.files();
+            let filter = fid::asc();
+            let files = files.search(filter).collect().await?;
+            let files: Vec<&modio::files::File> = files
+                .iter()
+                .filter(|file| file.platforms[0].target == TargetPlatform::WINDOWS)
+                .collect();
+
+            if online_version <= installed_version {
                 continue;
             }
             let mut new_manifest = mod_.manifest.clone();
             new_manifest.objects.pallet.updateDate = online_version.to_string();
-            let action = DownloadAction::File {
-                game_id: Id::new(BONELAB),
-                mod_id: Id::new(target.modId),
-                file_id: Id::new(target.modfileId),
-            };
-            modio
-                .download(action)
-                .await?
-                .save_to_file(mod_.manifest.clone().objects.pallet.palletBarcode + ".zip")
-                .await?;
-            todo!("its not done")
+            download_mod(
+                &online_mod,
+                &modio,
+                path.clone(),
+                opt.mod_folder.clone(),
+                Some(new_manifest),
+                files.last().map(|v| &**v) // the highest file id is the latest modfile
+            )
+            .await?;
         }
     }
 
@@ -248,7 +264,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let query = modio.user().subscriptions(filter).collect().await?;
         let pb = ProgressBar::new(installed_mods.len() as u64);
         pb.set_style(ProgressStyle::with_template(TEMPLATE).unwrap());
-        'outer: for mod_ in query.iter() {
+        for mod_ in query.iter() {
             pb.inc(1);
             pb.set_message(format!("{}", mod_.name));
             let mut found = false;
@@ -266,61 +282,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // println!("mod is installed");
             } else {
                 // println!("{}", mod_.name);
-                let modfile = &mod_.modfile;
-                let modfile = match modfile {
-                    Some(x) => x,
-                    None => {
-                        println!("no modfile");
-                        continue 'outer;
-                    }
-                };
-                let action = DownloadAction::File {
-                    game_id: Id::new(BONELAB),
-                    mod_id: Id::new(mod_.id.into()),
-                    file_id: Id::new(modfile.id.into()),
-                };
-                let _output = Command::new("mkdir").arg("zips")
-                    .output() // Execute the command
-                    .expect("Failed to execute command");
-                modio
-                    .download(action)
-                    .await?
-                    .save_to_file(format!("./zips/{}.zip", mod_.name.clone()))
-                    .await?;
-
-                // shell commands to unzip and then figure out the barcode and pallet name and catalog name
-                let current_dir = env::current_dir()?;
-                let current_dir = current_dir.to_str().unwrap();
-                let _output = Command::new("unzip")
-                    .args(["".to_string() + current_dir + "/zips/" + &mod_.name.clone() + "", "-d".into(), path.clone() + "/" + &mod_.name])
-                    .output() // Execute the command
-                    .expect("Failed to execute command");
-                let barcode = Command::new("ls").arg(path.clone() + "/" + &mod_.name).output()?.stdout;
-                let barcode = String::from_utf8(barcode)?;
-                let zip_path = path.clone() + "/" + &mod_.name + "/" + &barcode;
-                let zip_contents = Command::new("ls").arg("".to_owned() + &zip_path.trim() + "").output()?;
-                let zip_contents = zip_contents.stdout;
-                let zip_contents = String::from_utf8(zip_contents)?;
-                let mut jsons = Vec::new();
-                for line in zip_contents.lines() {
-                    if line.ends_with(".json") {
-                        jsons.push(line);
-                    }
-                }
-                assert_eq!(jsons.len(), 2);
-                if !jsons[0].ends_with("pallet.json") {
-                    jsons.reverse();
-                }
-                
-                let mani = make_manifest(mod_, modfile, &barcode, jsons[0].trim(), jsons[1].trim());
-                let mani_str = serde_json::to_string_pretty(&mani)?;
-                let mut save_path = opt.mod_folder.clone();
-                save_path.push(mani.clone().objects.pallet.palletBarcode + ".manifest");
-                let mut file = File::create(save_path)?;
-                file.write_all(mani_str.as_bytes())?;
-
-                let _output = Command::new("mv").arg(path.clone() + "/" + &mod_.name + "/*").arg(path.clone() + "/").output()?;
-                let _output = Command::new("rmdir").arg(path.clone() + "/" + &mod_.name).output()?;
+                download_mod(mod_, &modio, path.clone(), opt.mod_folder.clone(), None, None).await?;
             }
         }
         pb.finish();
@@ -328,8 +290,109 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn make_manifest(mod_: &Mod, modfile: &modio::files::File, barcode: &str, pallet_name: &str, catalog_name: &str) -> Manifest {
-    // let pallet_barcode = &(mod_.submitted_by.username.clone() + &mod_.name);
+async fn download_mod(
+    mod_: &Mod,
+    modio: &Modio,
+    path: String,
+    mod_folder: PathBuf,
+    manifest: Option<Manifest>,
+    modfile: Option<&modio::files::File>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let modfile = match modfile {
+        Some(x) => x,
+        None => {
+            let modfile = &mod_.modfile;
+            let modfile = match modfile {
+                Some(x) => x,
+                None => {
+                    println!("no modfile");
+                    return Ok(());
+                }
+            };
+            modfile
+        }
+    };
+
+    let action = DownloadAction::File {
+        game_id: Id::new(BONELAB),
+        mod_id: Id::new(mod_.id.into()),
+        file_id: Id::new(modfile.id.into()),
+    };
+    let _output = Command::new("mkdir")
+        .arg("zips")
+        .output() // Execute the command
+        .expect("Failed to execute command");
+    modio
+        .download(action)
+        .await?
+        .save_to_file(format!("./zips/{}.zip", mod_.name.clone()))
+        .await?;
+
+    // shell commands to unzip and then figure out the barcode and pallet name and catalog name
+    let current_dir = env::current_dir()?;
+    let current_dir = current_dir.to_str().unwrap();
+    let _output = Command::new("unzip")
+        .args([
+            "".to_string() + current_dir + "/zips/" + &mod_.name.clone() + "",
+            "-d".into(),
+            path.clone() + "/" + &mod_.name,
+        ])
+        .output() // Execute the command
+        .expect("Failed to execute command");
+    let barcode = Command::new("ls")
+        .arg(path.clone() + "/" + &mod_.name)
+        .output()?
+        .stdout;
+    let barcode = String::from_utf8(barcode)?;
+    let zip_path = path.clone() + "/" + &mod_.name + "/" + &barcode;
+    let zip_contents = Command::new("ls")
+        .arg("".to_owned() + &zip_path.trim() + "")
+        .output()?;
+    let zip_contents = zip_contents.stdout;
+    let zip_contents = String::from_utf8(zip_contents)?;
+    let mut jsons = Vec::new();
+    for line in zip_contents.lines() {
+        if line.ends_with(".json") {
+            jsons.push(line);
+        }
+    }
+    assert_eq!(jsons.len(), 2);
+    if !jsons[0].ends_with("pallet.json") {
+        jsons.reverse();
+    }
+
+    let mani = match manifest {
+        Some(x) => x,
+        None => make_manifest(mod_, modfile, &barcode, jsons[0].trim(), jsons[1].trim()),
+    };
+    let mani_str = serde_json::to_string_pretty(&mani)?;
+    let mut save_path = mod_folder;
+    save_path.push(mani.clone().objects.pallet.palletBarcode + ".manifest");
+    let mut file = File::create(save_path)?;
+    file.write_all(mani_str.as_bytes())?;
+
+    let _output = Command::new("mv")
+        .arg(path.clone() + "/" + &mod_.name + "/" + &barcode.trim())
+        .arg(path.clone() + "/")
+        .output()?;
+    println!("{:#?}", _output);
+    let _output = Command::new("rmdir")
+        .arg(path.clone() + "/" + &mod_.name)
+        .output()?;
+    println!("{:#?}", _output);
+    Ok(())
+}
+
+fn make_manifest(
+    mod_: &Mod,
+    modfile: &modio::files::File,
+    barcode: &str,
+    pallet_name: &str,
+    catalog_name: &str,
+) -> Manifest {
+    let barcode = barcode.trim();
+    let pallet_name = pallet_name.trim();
+    let catalog_name = catalog_name.trim();
     let time_now = mod_.date_updated.as_secs() * 1000;
     let mut targets = HashMap::new();
     targets.insert(
