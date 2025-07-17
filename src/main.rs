@@ -361,7 +361,7 @@ async fn download_mod(
     let _output = Command::new("mkdir")
         .arg(xdg_cache_home.clone() + "/bonelab-mod-manager")
         .output() // Execute the command
-        .expect("Failed to execute command");
+        .expect("Failed to execute command: mkdir");
     modio
         .download(action)
         .await?
@@ -376,7 +376,7 @@ async fn download_mod(
             path.clone() + "/" + &mod_.name,
         ])
         .output() // Execute the command
-        .expect("Failed to execute command");
+        .expect("Failed to execute command: unzip");
     let barcode = Command::new("ls")
         .arg(path.clone() + "/" + &mod_.name)
         .output()?
@@ -448,11 +448,11 @@ fn make_manifest(
             pallet: Pallet {
                 palletBarcode: barcode.into(),
                 palletPath: format!(
-                    "C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB\\\\Mods\\\\{}\\\\{}.pallet.json",
+                    "C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB\\\\Mods\\\\{}\\\\{}",
                     barcode, pallet_name
                 ),
                 catalogPath: format!(
-                    "C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB\\\\Mods\\\\{}\\\\{}.json",
+                    "C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB\\\\Mods\\\\{}\\\\{}",
                     barcode, catalog_name
                 ),
                 version: modfile.version.clone(),
