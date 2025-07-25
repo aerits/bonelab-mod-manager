@@ -77,20 +77,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         format!("{}/.config", home)
     });
     let opt = Opt::from_args();
-    let path = opt
-        .mod_folder
-        .clone();
+    let path = opt.mod_folder.clone();
     let path = match path {
-        Some(mut x) => x.as_mut_os_str()
-        .to_string_lossy()
-        .into_owned(),
+        Some(mut x) => x.as_mut_os_str().to_string_lossy().into_owned(),
         None => {
-            match fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_folder") {
-                Ok(x) => {x},
-                Err(_) => {throw("Missing modio folder")?},
+            match fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_folder")
+            {
+                Ok(x) => x,
+                Err(_) => throw("Missing modio folder")?,
             }
-        },
-    };  
+        }
+    };
 
     println!("{}", path);
 
@@ -138,14 +135,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     pb.finish_and_clear();
 
     let mut modio = Modio::new(Credentials::new(match opt.api_key {
-        Some(x) => {x},
-        None => {match fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_api_key") {
-            Ok(x) => {x},
-            Err(_) => {throw("Missing modio api key")?},
-        }},
+        Some(x) => x,
+        None => {
+            match fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_api_key")
+            {
+                Ok(x) => x,
+                Err(_) => throw("Missing modio api key")?,
+            }
+        }
     }))?;
 
-    let access_token = fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_access_token");
+    let access_token =
+        fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_access_token");
     if let Ok(token) = access_token {
         println!("token found");
         let token = Token {
@@ -167,7 +168,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let creds = modio.auth().security_code(&code).await?;
         if let Some(token) = &creds.token {
             println!("Access token:\n{}", token.value);
-            let mut file = File::create(xdg_config_home.clone() + "/bonelab-mod-manager/modio_access_token")?;
+            let mut file =
+                File::create(xdg_config_home.clone() + "/bonelab-mod-manager/modio_access_token")?;
             file.write_all(token.value.as_bytes())?;
             modio = modio.with_token(token.clone());
         } else {
@@ -178,7 +180,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("logged in as {}", user.unwrap().username);
 
     if opt.subscribe_all {
-        let mut subscribed_mods = match fs::read_to_string(xdg_config_home.clone() + "/bonelab-mod-manager/modio_subscribed_mods") {
+        let mut subscribed_mods = match fs::read_to_string(
+            xdg_config_home.clone() + "/bonelab-mod-manager/modio_subscribed_mods",
+        ) {
             Ok(x) => x,
             Err(_) => String::new(),
         };
@@ -189,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("subscribing to all installed mods...");
         let pb = ProgressBar::new(installed_mods.len() as u64);
         pb.set_style(ProgressStyle::with_template(TEMPLATE).unwrap());
-        'baseloop: for mod_ in installed_mods {
+        for mod_ in installed_mods {
             pb.inc(1);
             pb.set_message(format!(
                 "subscribing to {:?}",
@@ -227,10 +231,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         file.write_all(subscribed_mods.as_bytes())?;
     }
     if opt.update_all {
-        // println!("this option doesn't do anything yet");
         println!("updating all installed mods...");
         let pb = ProgressBar::new(installed_mods.len() as u64);
         pb.set_style(ProgressStyle::with_template(TEMPLATE).unwrap());
+        // loop through all mods and check if its up to date
         'baseloop: for mod_ in &installed_mods {
             pb.inc(1);
             pb.set_message(format!(
@@ -268,6 +272,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let online_mod = online_mod.unwrap();
             let online_version = online_mod.date_updated.as_secs() * 1000;
 
+            if online_version <= installed_version {
+                continue;
+            }
+
+            // find the newest files for the mod
             let files = modref.files();
             let filter = fid::asc();
             let files = files.search(filter).collect().await?;
@@ -276,11 +285,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .filter(|file| file.platforms[0].target == TargetPlatform::WINDOWS)
                 .collect();
 
-            if online_version <= installed_version {
-                continue;
-            }
             let mut new_manifest = mod_.manifest.clone();
             new_manifest.objects.pallet.updateDate = online_version.to_string();
+            // download
             download_mod(
                 &online_mod,
                 &modio,
@@ -288,7 +295,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PathBuf::from(path.clone()),
                 Some(new_manifest),
                 files.last().map(|v| &**v), // the highest file id is the latest modfile
-                Some(mod_.manifest.objects.pallet.installedDate.parse().unwrap())
+                Some(mod_.manifest.objects.pallet.installedDate.parse().unwrap()),
             )
             .await?;
         }
@@ -315,10 +322,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             if found {
-                // println!("mod is installed");
             } else {
-                // println!("{}", mod_.name);
-                download_mod(mod_, &modio, path.clone(), PathBuf::from(path.clone()), None, None, None).await?;
+                download_mod(
+                    mod_,
+                    &modio,
+                    path.clone(),
+                    PathBuf::from(path.clone()),
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
             }
         }
         pb.finish();
@@ -367,7 +381,11 @@ async fn download_mod(
     modio
         .download(action)
         .await?
-        .save_to_file(format!("{}/bonelab-mod-manager/{}.zip", &xdg_cache_home, mod_.name.clone()))
+        .save_to_file(format!(
+            "{}/bonelab-mod-manager/{}.zip",
+            &xdg_cache_home,
+            mod_.name.clone()
+        ))
         .await?;
 
     // shell commands to unzip and then figure out the barcode and pallet name and catalog name
@@ -403,7 +421,14 @@ async fn download_mod(
 
     let mani = match manifest {
         Some(x) => x,
-        None => make_manifest(mod_, modfile, &barcode, jsons[0].trim(), jsons[1].trim(), installed_date),
+        None => make_manifest(
+            mod_,
+            modfile,
+            &barcode,
+            jsons[0].trim(),
+            jsons[1].trim(),
+            installed_date,
+        ),
     };
     let mani_str = serde_json::to_string_pretty(&mani)?;
     let mut save_path = mod_folder;
@@ -432,10 +457,13 @@ fn make_manifest(
     let barcode = barcode.trim();
     let pallet_name = pallet_name.trim();
     let catalog_name = catalog_name.trim();
-    let time_now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+    let time_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     let installed_date = match installed_date {
-        Some(x) => {x},
-        None => {time_now},
+        Some(x) => x,
+        None => time_now,
     };
     let mut targets = HashMap::new();
     targets.insert(

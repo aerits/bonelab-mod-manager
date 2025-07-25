@@ -1,7 +1,5 @@
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Manifest {
     pub version: u64,
@@ -28,6 +26,7 @@ pub struct Object {
     pub mod_target: Option<ModTarget>,
 }
 
+#[allow(non_snake_case)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Pallet {
     pub palletBarcode: String,
@@ -41,6 +40,7 @@ pub struct Pallet {
     pub isa: Isa,
 }
 
+#[allow(non_snake_case)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ModListing {
     pub barcode: String,
@@ -53,6 +53,7 @@ pub struct ModListing {
     pub isa: Isa,
 }
 
+#[allow(non_snake_case)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ModTarget {
     pub thumbnailOverride: Option<String>,
@@ -75,28 +76,3 @@ pub struct Isa {
     #[serde(rename = "type")]
     pub type_: String,
 }
-
-// // Custom deserialization for Object
-// impl<'de> Deserialize<'de> for Object {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-//     where
-//         D: Deserializer<'de>,
-//     {
-//         // Deserialize into a serde_json::Value first
-//         let value: Value = Value::deserialize(deserializer)?;
-
-//         // Check for the presence of specific fields to determine the type
-//         if let Some(pallet) = value.get("palletBarcode") {
-//             let pallet: Pallet = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-//             return Ok(Object::Pallet(pallet));
-//         } else if let Some(mod_listing) = value.get("barcode") {
-//             let mod_listing: ModListing = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-//             return Ok(Object::ModListing(mod_listing));
-//         } else if let Some(mod_target) = value.get("gameId") {
-//             let mod_target: ModTarget = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-//             return Ok(Object::ModTarget(mod_target));
-//         }
-
-//         Err(serde::de::Error::custom("Unknown object type"))
-//     }
-// }
