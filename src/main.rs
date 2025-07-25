@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     process::Command,
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use indicatif::{ProgressBar, ProgressStyle};
@@ -287,7 +287,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 path.clone(),
                 PathBuf::from(path.clone()),
                 Some(new_manifest),
-                files.last().map(|v| &**v) // the highest file id is the latest modfile
+                files.last().map(|v| &**v), // the highest file id is the latest modfile
+                Some(mod_.manifest.objects.pallet.installedDate.parse().unwrap())
             )
             .await?;
         }
@@ -317,7 +318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // println!("mod is installed");
             } else {
                 // println!("{}", mod_.name);
-                download_mod(mod_, &modio, path.clone(), PathBuf::from(path.clone()), None, None).await?;
+                download_mod(mod_, &modio, path.clone(), PathBuf::from(path.clone()), None, None, None).await?;
             }
         }
         pb.finish();
@@ -332,6 +333,7 @@ async fn download_mod(
     mod_folder: PathBuf,
     manifest: Option<Manifest>,
     modfile: Option<&modio::files::File>,
+    installed_date: Option<u128>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let modfile = match modfile {
         Some(x) => x,
@@ -401,7 +403,7 @@ async fn download_mod(
 
     let mani = match manifest {
         Some(x) => x,
-        None => make_manifest(mod_, modfile, &barcode, jsons[0].trim(), jsons[1].trim()),
+        None => make_manifest(mod_, modfile, &barcode, jsons[0].trim(), jsons[1].trim(), installed_date),
     };
     let mani_str = serde_json::to_string_pretty(&mani)?;
     let mut save_path = mod_folder;
@@ -425,11 +427,16 @@ fn make_manifest(
     barcode: &str,
     pallet_name: &str,
     catalog_name: &str,
+    installed_date: Option<u128>,
 ) -> Manifest {
     let barcode = barcode.trim();
     let pallet_name = pallet_name.trim();
     let catalog_name = catalog_name.trim();
-    let time_now = mod_.date_updated.as_secs() * 1000;
+    let time_now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+    let installed_date = match installed_date {
+        Some(x) => {x},
+        None => {time_now},
+    };
     let mut targets = HashMap::new();
     targets.insert(
         "pc".to_string(),
@@ -448,15 +455,15 @@ fn make_manifest(
             pallet: Pallet {
                 palletBarcode: barcode.into(),
                 palletPath: format!(
-                    "C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB\\\\Mods\\\\{}\\\\{}",
+                    "C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB/Mods/{}/{}",
                     barcode, pallet_name
                 ),
                 catalogPath: format!(
-                    "C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB\\\\Mods\\\\{}\\\\{}",
+                    "C:/users/steamuser/AppData/LocalLow/Stress Level Zero/BONELAB/Mods/{}/{}",
                     barcode, catalog_name
                 ),
                 version: modfile.version.clone(),
-                installedDate: time_now.to_string(),
+                installedDate: installed_date.to_string(),
                 updateDate: time_now.to_string(),
                 modListing: Some(Reference {
                     reference: "2".into(),
@@ -470,7 +477,7 @@ fn make_manifest(
             mod_listing: Some(ModListing {
                 barcode: barcode.into(),
                 title: Some(mod_.name.clone()),
-                description: mod_.description.clone(),
+                description: mod_.description_plaintext.clone(),
                 author: Some(mod_.submitted_by.username.clone()),
                 version: modfile.version.clone(),
                 thumbnailUrl: Some(mod_.logo.thumb_320x180.to_string()),
